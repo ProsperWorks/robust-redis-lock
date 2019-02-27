@@ -51,8 +51,6 @@ describe Redis::Lock do
 
         sleep 2
         subject.try_lock.should == :recovered
-
-        Redis::Lock.all.should =~ [subject]
       end
 
       it "raises if trying to unlock a lock that has been recovered" do
@@ -183,13 +181,6 @@ describe Redis::Lock do
         sleep 1
       end
 
-      it "returns the data when a recovered lock is extended" do
-        lock = Redis::Lock.expired.first
-        lock.extend
-
-        lock.recovery_data.should == data
-      end
-
       it "raises and does not overwrite the data if attempting to lock twice" do
         2.times do
           begin
@@ -200,71 +191,6 @@ describe Redis::Lock do
           end
         end
       end
-    end
-  end
-end
-
-describe Redis::Lock, '#expired' do
-  context "when there are no expired locks" do
-    it "returns an empty array" do
-      Redis::Lock.expired.should be_empty
-    end
-  end
-
-  context "when there are expired locks and unexpired locks" do
-    let(:expired)   { Redis::Lock.new('1', { :expire => 0,    :key_group => key_group }) }
-    let(:unexpired) { Redis::Lock.new('2', { :expire => 100,  :key_group => key_group }) }
-    let(:key_group) { 'test' }
-
-    before do
-      expired.lock
-      unexpired.lock
-      sleep 1
-    end
-
-    it "returns all locks that are expired" do
-      Redis::Lock.expired(:key_group => key_group).should == [expired]
-    end
-
-    it "only returns locks for the current key_group" do
-      Redis::Lock.expired(:key_group => 'xxx').should be_empty
-    end
-
-    it "removes the key when locking then recovering an expired lock" do
-      lock = Redis::Lock.expired(:key_group => key_group).first
-
-      lock.unlock
-
-      Redis::Lock.all(:key_group => key_group).should == [unexpired]
-    end
-
-    it "is possible to extend a lock returned and only allow a recovered lock to be extended once" do
-      lock1 = Redis::Lock.expired(:key_group => key_group).first
-      lock2 = Redis::Lock.expired(:key_group => key_group).first
-
-      lock1.try_extend.should == true
-      lock2.try_extend.should == false
-
-      Redis::Lock.all(:key_group => key_group).should =~ [lock1, unexpired]
-    end
-
-    it 'extending a lock updates the list of expired locks' do
-      Redis::Lock.expired(:key_group => key_group).first.extend
-
-      Redis::Lock.all(:key_group => key_group).should =~ [expired, unexpired]
-    end
-  end
-
-  context "with keys that contain ':'" do
-    let(:expired)   { Redis::Lock.new('1:1:1', { :expire => 0 }) }
-
-    before do
-      expired.lock
-      sleep 1
-    end
-
-    it "returns all locks that are expired" do
-      Redis::Lock.expired.should == [expired]
     end
   end
 end

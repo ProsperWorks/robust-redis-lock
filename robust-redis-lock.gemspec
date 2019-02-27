@@ -14,7 +14,8 @@ Gem::Specification.new do |s|
   s.summary     = "Robust redis lock"
   s.description = "Robust redis lock"
 
-  s.add_dependency "redis",         ">= 3.0.0"
+  s.add_dependency "redis",                ">= 3.0.0"
+  s.add_dependency "redis-script_manager", "~> 0.0.2"
 
   s.files        = Dir["lib/**/*"]
   s.require_path = 'lib'
