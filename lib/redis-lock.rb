@@ -1,4 +1,5 @@
 require 'redis'
+require 'securerandom'
 
 class Redis::Lock
   NAMESPACE = 'redis:lock'
@@ -70,14 +71,12 @@ class Redis::Lock
         local now = tonumber(ARGV[2])
         local expires_at = tonumber(ARGV[3])
         local recovery_data = ARGV[4]
-        local token_key = 'redis:lock:token'
+        local next_token = ARGV[5]
 
         local prev_expires_at = tonumber(redis.call('hget', key, 'expires_at'))
         if prev_expires_at and prev_expires_at > now then
           return {'locked', nil, nil}
         end
-
-        local next_token = redis.call('incr', token_key)
 
         redis.call('hset', key, 'expires_at', expires_at)
 
@@ -92,9 +91,10 @@ class Redis::Lock
         redis.call('hset', key, 'token', next_token)
         return return_value
     LUA
+    next_token = SecureRandom.uuid
     result, token, recovery_data = @@lock_script.eval(@redis,
                                                       :keys => [namespaced_key],
-                                                      :argv => [@key, now.to_i, now.to_i + @expire, options[:recovery_data]])
+                                                      :argv => [@key, now.to_i, now.to_i + @expire, options[:recovery_data], next_token])
 
     case result
     when 'locked'
@@ -148,10 +148,9 @@ class Redis::Lock
         local bare_key = ARGV[1]
         local expires_at = tonumber(ARGV[2])
         local token = ARGV[3]
-        local token_key = 'redis:lock:token'
+        local next_token = ARGV[4]
 
         if redis.call('hget', key, 'token') == token then
-          local next_token = redis.call('incr', token_key)
 
           redis.call('hset', key, 'expires_at', expires_at)
           redis.call('hset', key, 'token', next_token)
@@ -161,7 +160,8 @@ class Redis::Lock
           return false
         end
     LUA
-    result = @@extend_script.eval(@redis, :keys => [namespaced_key], :argv => [@key, now.to_i + @expire, @token])
+    next_token = SecureRandom.uuid
+    result = @@extend_script.eval(@redis, :keys => [namespaced_key], :argv => [@key, now.to_i + @expire, @token, next_token])
 
     if result
       @token, @recovery_data = result
