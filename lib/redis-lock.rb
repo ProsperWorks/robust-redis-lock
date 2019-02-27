@@ -13,43 +13,16 @@ class Redis::Lock
     attr_accessor :timeout
     attr_accessor :sleep
     attr_accessor :expire
-    attr_accessor :key_group
-
-    def expired(options={})
-      redis = options[:redis] || self.redis
-      raise "redis cannot be nil" if redis.nil?
-
-      redis.zrangebyscore(key_group_key(options), 0, Time.now.to_i).to_a.map do |key_token|
-        key, token = key_token.scan(/(.*):(.*)$/).first
-        self.new(key, options.merge(:token => token))
-      end
-    end
-
-    def all(options={})
-      redis = options[:redis] || self.redis
-      raise "redis cannot be nil" if redis.nil?
-
-      redis.zrangebyscore(key_group_key(options), 0, "+inf").to_a.map do |key_token|
-        key, token = key_token.scan(/(.*):(.*)$/).first
-        self.new(key, options.merge(:token => token))
-      end
-    end
-
-    def key_group_key(options)
-      [NAMESPACE, (options[:key_group] || self.key_group), 'group'].join(':')
-    end
   end
 
   self.timeout    = 60
   self.expire     = 60
   self.sleep      = 0.1
-  self.key_group  = 'default'
 
   def initialize(key, options={})
     @options = options
 
     @key = key
-    @key_group_key = self.class.key_group_key(@options)
 
     @redis    = @options[:redis] || self.class.redis
     raise "redis cannot be nil" if @redis.nil?
@@ -93,7 +66,6 @@ class Redis::Lock
     # that's okay, because the race is harmless.
     @@lock_script ||= Script.new <<-LUA
         local key = KEYS[1]
-        local key_group = KEYS[2]
         local bare_key = ARGV[1]
         local now = tonumber(ARGV[2])
         local expires_at = tonumber(ARGV[3])
@@ -108,11 +80,9 @@ class Redis::Lock
         local next_token = redis.call('incr', token_key)
 
         redis.call('hset', key, 'expires_at', expires_at)
-        redis.call('zadd', key_group, expires_at, bare_key .. ':' .. next_token)
 
         local return_value = nil
         if prev_expires_at then
-          redis.call('zrem', key_group, bare_key .. ':' .. redis.call('hget', key, 'token'))
           return_value =  {'recovered', next_token, redis.call('hget', key, 'recovery_data')}
         else
           redis.call('hset', key, 'recovery_data', recovery_data)
@@ -123,7 +93,7 @@ class Redis::Lock
         return return_value
     LUA
     result, token, recovery_data = @@lock_script.eval(@redis,
-                                                      :keys => [namespaced_key, @key_group_key],
+                                                      :keys => [namespaced_key],
                                                       :argv => [@key, now.to_i, now.to_i + @expire, options[:recovery_data]])
 
     case result
@@ -151,19 +121,17 @@ class Redis::Lock
     # remains the same, and do not release when the lock timestamp was overwritten.
     @@unlock_script ||= Script.new <<-LUA
         local key = KEYS[1]
-        local key_group = KEYS[2]
         local bare_key = ARGV[1]
         local token = ARGV[2]
 
         if redis.call('hget', key, 'token') == token then
           redis.call('del', key)
-          redis.call('zrem', key_group, bare_key .. ':' .. token)
           return true
         else
           return false
         end
     LUA
-    !!@@unlock_script.eval(@redis, :keys => [namespaced_key, @key_group_key], :argv => [@key, @token]).tap do
+    !!@@unlock_script.eval(@redis, :keys => [namespaced_key], :argv => [@key, @token]).tap do
       @token = nil
     end
   end
@@ -177,7 +145,6 @@ class Redis::Lock
 
     @@extend_script ||= Script.new <<-LUA
         local key = KEYS[1]
-        local key_group = KEYS[2]
         local bare_key = ARGV[1]
         local expires_at = tonumber(ARGV[2])
         local token = ARGV[3]
@@ -189,15 +156,12 @@ class Redis::Lock
           redis.call('hset', key, 'expires_at', expires_at)
           redis.call('hset', key, 'token', next_token)
 
-          redis.call('zrem', key_group, bare_key .. ':' .. token)
-          redis.call('zadd', key_group, expires_at, bare_key .. ':' .. next_token)
-
           return { next_token, redis.call('hget', key, 'recovery_data') }
         else
           return false
         end
     LUA
-    result = @@extend_script.eval(@redis, :keys => [namespaced_key, @key_group_key], :argv => [@key, now.to_i + @expire, @token])
+    result = @@extend_script.eval(@redis, :keys => [namespaced_key], :argv => [@key, now.to_i + @expire, @token])
 
     if result
       @token, @recovery_data = result
