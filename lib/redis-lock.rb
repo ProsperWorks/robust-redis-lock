@@ -94,7 +94,7 @@ class Redis::Lock
     next_token = SecureRandom.uuid
     result, token, recovery_data = @@lock_script.eval(@redis,
                                                       :keys => [namespaced_key],
-                                                      :argv => [@key, now.to_i, now.to_i + @expire, options[:recovery_data], next_token])
+                                                      :argv => [@key, now.to_f, now.to_f + @expire.to_f, options[:recovery_data] || '', next_token])
 
     case result
     when 'locked'
@@ -161,7 +161,7 @@ class Redis::Lock
         end
     LUA
     next_token = SecureRandom.uuid
-    result = @@extend_script.eval(@redis, :keys => [namespaced_key], :argv => [@key, now.to_i + @expire, @token, next_token])
+    result = @@extend_script.eval(@redis, :keys => [namespaced_key], :argv => [@key, now.to_f + @expire.to_f, @token, next_token])
 
     if result
       @token, @recovery_data = result
